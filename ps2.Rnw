@@ -1,0 +1,450 @@
+% My knitr options
+<<echo=F>>=
+knitr::opts_chunk$set(fig.pos = 'h')
+@
+
+\documentclass[11pt]{article}
+\usepackage{amsmath, amssymb, amsthm, etoolbox, bm, enumitem}
+\usepackage{enumitem, multicol, tasks, mathrsfs, hyperref, mhchem}
+% stops Latex Font Warning: Font shape `OMS/cmtt/m/n' undefined
+\usepackage[T1]{fontenc}
+\addtolength{\evensidemargin}{-.5in}
+\addtolength{\oddsidemargin}{-.5in}
+\addtolength{\textwidth}{0.8in}
+\addtolength{\textheight}{0.8in}
+\addtolength{\topmargin}{-.4in}
+
+\AtBeginEnvironment{proof}{\setcounter{equation}{0}}
+
+\newtheorem{prop}{Proposition}
+\newtheoremstyle{quest}{\topsep}{\topsep}{}{}{\bfseries}{}{ }{\thmname{#1}\thmnote{ #3}.}
+\theoremstyle{quest}
+\newtheorem*{question}{Question}
+\newtheorem*{qpart}{}
+\newtheorem*{definition}{Definition}
+\newtheorem*{theorem}{Theorem}
+\newtheorem*{lemma}{Lemma}
+\newtheorem*{exercise}{Exercise}
+\newtheorem*{challengeproblem}{Challenge Problem}
+
+\newcommand{\name}{%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% put your name here, so we know who to give credit to %%
+    Jaecheol Lee, Wenjun Wang, and Marshall Blundell
+}%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newcommand{\hw}{%%%%%%%%%%%%%%%%%%%%
+%% and which homework assignment is it? %%%%%%%%%
+%% put the correct number below              %%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+2
+}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\title{\vspace{-50pt}
+\Large \name
+\\\vspace{20pt}
+\huge ARE 212\hfill Homework \hw}
+\author{}
+\date{March 20, 2018}
+\pagestyle{myheadings}
+\markright{\name\hfill Homework \hw\qquad\hfill}
+
+%% If you want to define a new command, you can do it like this:
+\newcommand{\Q}{\mathbb{Q}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\Z}{\mathbb{Z}}
+\newcommand{\N}{\mathbb{N}}
+\newcommand{\I}{\mathbb{I}}
+\newcommand{\C}{\mathbb{C}}
+\newcommand{\interior}[1]{%
+  {\kern0pt#1}^{\mathrm{o}}%
+}
+\newcommand\given[1][]{\:#1\vert\:}
+
+% https://tex.stackexchange.com/questions/79434/double-perpendicular-symbol-for-independence
+\newcommand\independent{\protect\mathpalette{\protect\independenT}{\perp}}
+\def\independenT#1#2{\mathrel{\rlap{$#1#2$}\mkern2mu{#1#2}}}
+
+%% If you want to use a function like ''sin'' or ''cos'', you can do it like this
+%% (we probably won't have much use for this)
+% \DeclareMathOperator{\sin}{sin}   %% just an example (it's already defined)
+\DeclareMathOperator{\sgn}{sgn}
+\DeclareMathOperator{\mesh}{mesh}
+
+
+\begin{document}
+\maketitle
+
+First we set up and define some functions.
+<<setUpChunk>>=
+# 
+# Set up.
+#
+library(pacman)
+p_load(readr, xlsx, ggplot2)
+
+dir <- "C:/Users/mblundell/Documents/ARE/ARE212/PS2/"
+originaldata <- paste0(dir, "OriginalData/")
+output <- paste0(dir, "Output/")
+@
+
+<<functionsChunk>>=
+# 
+# Load functions
+#
+
+#
+# demean() takes a vector and returns demeaned vector.
+#
+demean <- function(x) x - mean(x)
+
+#
+# reg() takes a vector y and a matrix X and regresses y on X
+# Return value is matrix of coefficients.
+# Does not include an intercept by default. User must append
+# a vector of ones to X in that case.
+#
+reg <- function(y, X) {
+    solve(t(X) %*% X) %*% t(X) %*% y
+}
+
+#
+# pred() takes a matrix X and a matrix beta
+# Return value is vector of predicted values.
+#
+pred <- function(X, beta) {
+    as.vector(X %*% beta)
+}
+
+#
+# R.squared() takes a vector e of residuals and a vector
+# dependent variable y and returns centered R squared.
+#
+R.squared <- function(e, y) {
+    y.demeaned <- demean(y)
+    as.vector(1 - ((t(e) %*% e) / (t(y.demeaned) %*% y.demeaned)))
+}
+
+# 
+# report.stats() makes summary stats for a regression. 
+# Takes a vector dependent variable y, a matrix of regressors X,
+# and fitted values beta.
+# Returns beta and R^2 in a list.
+#
+report.stats <- function(y, X, beta) {
+    # Set up output
+    out <- list()
+
+    # Get some intermediate values
+    df <- dim(X)[1] - dim(X)[2]
+    y.hat  <- pred(X, beta)
+    e <- y - y.hat
+    n <- dim(X)[1]
+
+    # Compile output
+    rownames(beta)[1] <- "Intercept"
+    out$beta <- beta
+    # out$adj.R2 <- adj.R.squared(e, y, n - 1, df)
+    out$R2 <- R.squared(e, y)
+    out
+}
+
+# 
+# t.test() peroforms two-sided t-test for a regression coefficient.
+# Takes y, X, estimated beta, index of coefficient, and value
+# of null hypothesis.
+# Returns t-stat and p-value in a list.
+#
+t.test <- function(y, X, beta, i, null = 0) {
+    y.hat  <- pred(X, beta)
+    e <- y - y.hat
+    df <- dim(X)[1] - dim(X)[2]
+    s.sq <- (t(e) %*% e) / df
+    t.stat <- (beta[i] - null) / (s.sq * solve(t(X) %*% X)[i, i])^0.5
+    prob <- pt(t.stat, df)
+    return(list(t.stat=t.stat, p.value=2 * min(prob, 1 - prob)))
+}
+
+# 
+# pearson.r() calculates pearson's correlation coefficient for sample. 
+# Takes vectors x and y as inputs.
+# Returns scalar correlation coefficient.
+#
+pearson.r <- function(x, y) {
+    x.dm <- demean(x)
+    y.dm <- demean(y)
+    r <- (t(y.dm) %*% x.dm) / ((t(y.dm) %*% y.dm)^0.5 * (t(x.dm) %*% x.dm)^0.5)
+    return(r)
+}
+
+# 
+# f.test() runs an f.test using nested models.
+# takes y, X, and beta for two models. Model 1 must be nested
+# or restricted version of model 2.
+# Returns f-stat and p-value in a list.
+#
+f.test <- function(y.1, X.1, beta.1, y.2, X.2, beta.2) {
+    e.1 <- y - pred(X.1, beta.1)
+    e.2 <- y - pred(X.2, beta.2)
+    df.1 <- dim(X.1)[1] - dim(X.1)[2]
+    df.2 <- dim(X.2)[1] - dim(X.2)[2]
+    ssr.1 <- t(e.1) %*% e.1
+    ssr.2 <- t(e.2) %*% e.2
+    f.stat <- ((ssr.1 - ssr.2) / (df.1 - df.2)) / (ssr.2 / df.2)
+    p.value <- pf(f.stat, df.1 - df.2, df.2, lower.tail=F)
+    return(list(f.stat=f.stat, p.value=p.value))
+}
+@
+
+\begin{question}[1]
+Read the data into \textsf{R}. Print out the data. Read it. Plot the series and
+make sure your data are read in correctly. Make sure your data are sorted by
+size (kWh).
+\end{question}
+
+<<q1Chunk, warning=F>>=
+#
+# Load data and check it out.
+#
+data <- read.xlsx(paste0(originaldata, "nerlove.xls"),
+                   sheetIndex=1,
+                   stringsAsFactors=F,
+                   colClasses="numeric")
+
+# Looks like a typo for labor wage
+summary(data)
+# Correct typo
+data[which(data$PL > 180), c("PL")] <- data[which(data$PL > 180), c("PL")] / 100
+
+# Total cost vs kWh
+ggplot(data=data, aes(x=Q, y=TC)) +
+geom_point() +
+scale_y_continuous(breaks=seq(0, 140, 10)) +
+scale_x_continuous(breaks=seq(0, 18000, 2000))
+
+# Labor wage vs kWh
+ggplot(data=data, aes(x=Q, y=PL)) +
+geom_point() +
+scale_y_continuous(breaks=seq(1.4, 2.4, .1)) +
+scale_x_continuous(breaks=seq(0, 18000, 2000))
+
+# Fuel price vs kWh
+ggplot(data=data, aes(x=Q, y=PF)) +
+geom_point() +
+scale_y_continuous(breaks=seq(10, 50, 5)) +
+scale_x_continuous(breaks=seq(0, 18000, 2000))
+
+# Capital price vs kWh
+ggplot(data=data, aes(x=Q, y=PK)) +
+geom_point() +
+scale_y_continuous(breaks=seq(130, 240, 10)) +
+scale_x_continuous(breaks=seq(0, 18000, 2000))
+
+# Sort by kWh
+data <- data[order(data$Q),]
+rownames(data) <- NULL # Fixes row names
+@
+
+\begin{question}[2]
+Replicate regression I (page 176) in the paper. Your estimate for
+the price differences will differ slightly, but the $\mathit{R}^2$
+will be the same.
+\end{question}
+
+<<q2Chunk>>=
+# 
+# Replicate regression I (page 176) in the paper.
+#
+
+# Make X
+X <- cbind(1, log(data$Q), log(data$PL) - log(data$PF), log(data$PK) - log(data$PF))
+colnames(X) <- c("K", "Y", "P1 - P3", "P2 - P3")
+
+# Make Y
+y <- log(data$TC) - log(data$PF)
+
+# Run regression, get stats
+# R2 matches
+beta.1 <- reg(y, X)
+report.stats(y, X, beta.1)
+@
+
+\begin{question}[3]
+Conduct the hypothesis test using constant returns to scale
+($\beta_y = 1$) as your null hypothesis. What is the p-value
+associated with your test statistic? What is your point estimate
+or returns to scale? Constant? Increasing? Decreasing?
+\end{question}
+
+The p-value is 1.5e-33. Our coefficient on output is .72.
+This means our returns to scale point estimate is 1.39, so
+we have increasing returns to scale.
+
+<<q3Chunk>>=
+# 
+# Conduct a hypothesis test for B_y = 1 as null.
+#
+
+# We get p-value of 7.5e-34. That's very small.
+t.test(y, X, beta.1, i=2, null=1)
+@
+
+\begin{question}[4]
+Plot the residuals against output. What do you notice? What does this
+potentially tell you from an economic perspective? Compute the 
+correlation coefficient of the residuals with output for the entire
+sample. What does this tell you?
+\end{question}
+
+Residuals have a quadratic relationship with output. In particular,
+they are increasing in output for values of output above
+about 4, and decreasing in output for values of output below 4. 
+This means firms of different size have different
+parameters for the cost function.
+
+Correlation coefficient of residuals with ln(output) is 0. This
+is what we would expect as a property of OLS. That of residuals
+with output is .36, so there is a positive relationship between
+residuals and output.
+
+<<q4Chunk>>=
+# 
+# Plot residuals against output.
+# Looks like residuals have a quadratic relationship with output.
+# Means firms of different size have different parameters for
+# the cost function.
+#
+y.hat  <- pred(X, beta.1)
+e <- y - y.hat
+to.plot <- data.frame(output=X[, c("Y")], residuals=e)
+ggplot(data=to.plot, aes(x=output, y=e)) +
+geom_point() +
+xlab("Output ln(kWh)") +
+ylab("Residuals")
+
+# Calculate correlation coefficient of residuals with
+# output
+# This is zero, which we would expect by construction.
+pearson.r(X[, c("Y")], e)
+
+# The above was log output so use regular output
+pearson.r(data$Q, e)
+@
+
+\begin{question}[5]
+Nerlove tried to remedy his ``residual problem'' by running separate
+models for different sized industries. Divide your sample into 5
+subgroups of 29 firms each according to the level of output. Estimate
+the regression model again for each group separately. Can you replicate
+Equations IIIA--IIIE? Calculate the point estimates for returns to 
+scale for each sample. Is there a pattern relating to size of output?
+\end{question}
+
+Yes we can replicate equations IIIA--IIIE. Returns to scale
+is decreasing in size of output.
+
+<<q5Chunk>>=
+# 
+# Run separate regressions for industry quintiles
+# Returns to scale is decreasing in firm size.
+#
+divided <- split(as.data.frame(cbind(y, X)), cut(1:dim(X)[1], 5))
+lapply.reg.report <- function(x) {
+    y <- x[, 1]
+    X <- as.matrix(x[, -1])
+    report.stats(y, X, reg(y, X))
+}
+size.regs <- lapply(divided, lapply.reg.report)
+size.regs # Print results
+
+# Calculate returns to scale for each
+lapply(size.regs, function(x) 1 / x$beta[2])
+@
+
+\begin{question}[6]
+Create ``dummy variables'' for each industry. Interact them with the
+output variable to create five ``slope coefficients.'' Run a model, 
+letting the intercept and slope coefficient on output differ across
+plants, but let the remainder of the coefficients by pooled across
+plants. Are there any noticeable changes in returns to scale from the 
+previous part?
+\end{question}
+
+Returns to scale are very similar to the previous part.
+
+<<q6Chunk>>=
+# 
+# Create dummy variables for each industry. Interact with
+# output to create five slope coefficients. Run model letting
+# intercept and slope coefficients on outpus differ across
+# plant size.
+#
+
+# Make matrix of dummy variables
+all.bins <- cut(1:dim(X)[1], 5)
+dummy <- function(bin){as.numeric(all.bins == bin)}
+D <- sapply(unique(all.bins), dummy)
+
+# Make X with fixed effects
+X.fe <- cbind(D, D * X[, c("Y")], X[, 3:4])
+colnames(X.fe) <- c(paste0("K.", 1:5),
+                    paste0("Y.", 1:5),
+                    colnames(X[, 3:4]))
+
+# Make Y
+y <- log(data$TC) - log(data$PF)
+
+# Run regression
+beta.fe <- reg(y, X.fe)
+beta.fe # Print
+@
+
+\begin{question}[7]
+Conduct a statistical test comparing the first model you estimate to the
+last model you estimated. Would separate t-tests have given you the same results?
+\end{question}
+
+Separate t-test would non have given us the same answer. 
+They do not take into account correlation between
+variables. Our test here rejects the null.
+
+<<q7Chunk>>=
+# 
+# Construct a statistical test comparing the first model
+# with the second.
+#
+f.test(y, X, beta.1, y, X.fe, beta.fe)
+@
+
+\begin{question}[8]
+To see whether returns to scale declined with output, Nerlove tested
+a nonlinear specification by including $(ln(y))^2$ as a regressor. Conduct
+a statistical test you feel is appropriate to test this hypothesis.
+\end{question}
+
+We include $(ln(y))^2$ as a regressor in our original specification.
+A two-sided t-test of coefficient on $(ln(y))^2$ with 0 as the null, 
+yields a very small p-value. We reject the null. This suggests that
+returns to scale decline with output.
+
+<<q8Chunk>>=
+# 
+# Test whether returns to scale decline with output
+#
+
+# Include quadratic term on output
+X.rts <- cbind(X, log(data$Q)^2)
+colnames(X.rts) <- c(colnames(X), "Y.sq")
+
+# Run regression
+beta.rts <- reg(y, X.rts)
+
+report.stats(y, X.rts, beta.rts)
+
+# Run test.
+t.test(y, X.rts, beta.rts, i=5, null=0)
+@
+
+\end{document}
